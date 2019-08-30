@@ -1,0 +1,192 @@
+library(tm); library(tidyr); library(dplyr); library(ggplot2); 
+library(ggthemes);library(tokenizers);library(tidytext)
+library(rpart); library(rpart.plot); library(stringr);
+library(mice);library(VIM);library(qdap)
+
+#data cleaning
+data1 = readxl::read_xlsx("/Users/yvonnewang/Documents/sentiment analysis/Raw/Jan.xlsx")
+data2 = readxl::read_xlsx("/Users/yvonnewang/Documents/sentiment analysis/Raw/Feb.xlsx")
+data3 = readxl::read_xlsx("/Users/yvonnewang/Documents/sentiment analysis/Raw/March.xlsx")
+data4 = readxl::read_xlsx("/Users/yvonnewang/Documents/sentiment analysis/Raw/April.xlsx")
+data5 = readxl::read_xlsx("/Users/yvonnewang/Documents/sentiment analysis/Raw/May.xlsx")
+data6 = readxl::read_xlsx("/Users/yvonnewang/Documents/sentiment analysis/Raw/June.xlsx")
+data7 = readxl::read_xlsx("/Users/yvonnewang/Documents/sentiment analysis/Raw/July.xlsx")
+data = rbind(data1,data2)
+data = rbind(data,data3)
+data = rbind(data,data4)
+data = rbind(data,data5)
+data = rbind(data,data6)
+data = rbind(data,data7)
+data = data[,c(1:4,6:14)]
+names(data) <- c("Respondent ID","Collector ID","Start Date","End Date",
+                 "likely to recommend",
+                 "changes wanted",
+                 "good",
+                 "improve?",
+                 "house key copy","car key copy","RFID copy","saved key copy","locksmith")
+data = data[-c(1),]
+nrow(data) #22919
+summary(data$`likely to recommend`) 
+
+#Impute missing value with 0 1 for binary question
+data$`house key copy` <- replace(data$`house key copy`, !is.na(data$`house key copy`), 1)
+data$`house key copy` <- replace(data$`house key copy`, is.na(data$`house key copy`), 0)
+data$`house key copy` <- as.numeric(data$`house key copy`)
+
+data$`car key copy` <- replace(data$`car key copy`,!is.na(data$`car key copy`),1)
+data$`car key copy` <- replace(data$`car key copy`,is.na(data$`car key copy`),0)
+data$`car key copy` <- as.numeric(data$`car key copy`)
+
+data$`RFID copy` <- replace(data$`RFID copy`,!is.na(data$`RFID copy`),1)
+data$`RFID copy` <- replace(data$`RFID copy`,is.na(data$`RFID copy`),0)
+data$`RFID copy` <- as.numeric(data$`RFID copy`)
+
+data$`saved key copy` <- replace(data$`saved key copy`,!is.na(data$`saved key copy`),1)
+data$`saved key copy` <- replace(data$`saved key copy`,is.na(data$`saved key copy`),0)
+data$`saved key copy` <- as.numeric(data$`saved key copy`)
+
+data$locksmith <- replace(data$locksmith,!is.na(data$locksmith),1)
+data$locksmith <- replace(data$locksmith,is.na(data$locksmith),0)
+data$locksmith <- as.numeric(data$locksmith)
+
+#check missing value in likely to recommend
+any(is.na(data$`likely to recommend`)) 
+sum(is.na(data$`likely to recommend`))
+data$`likely to recommend`[is.na(data$`likely to recommend`)]
+
+#data cleaning for likely to recommend - remove rows that contain NAs
+data$`likely to recommend` = as.numeric(data$`likely to recommend`)
+data = data[!is.na(data$`likely to recommend`),]
+sum(is.na(data$`likely to recommend`))
+
+sum(is.na(data$`changes wanted`))#14352 NA 
+sum(is.na(data$good)) #14224 NA
+sum(is.na(data$`improve?`)) #15570
+
+#data cleaning for start date
+data$`Start Date` = as.Date(data$`Start Date`)
+data$`End Date` = as.Date(data$`End Date`)
+summary(data$`Start Date`)
+
+write.csv(data, file = "/Users/yvonnewang/Documents/sentiment analysis/Raw/recommend.csv", row.names = FALSE)
+
+md.pattern(data)
+ 
+mice_plot <- aggr(data, col=c('navyblue','yellow'),
+                    numbers=TRUE, sortVars=TRUE,
+                    labels=names(data), cex.axis=.7,
+                    gap=3, ylab=c("Missing data","Pattern"))
+
+#Analyzing Data###########################################
+max(data$`Start Date`)
+min(data$`Start Date`)
+nrow(data)
+
+#Mean score
+mean(data$`likely to recommend`) #6.1
+data %>% 
+  filter(`likely to recommend` >0 & `likely to recommend` <10) %>%
+  summarize(nps_mean = mean(`likely to recommend`)) #exclude 0 and 10 mean = 5.8
+
+ggplot(data=data,aes(x=`likely to recommend`))+
+  geom_histogram(fill='sienna')+
+  theme_economist()
+  
+# Calculate Net Promoter Score = %promoters - % detractors
+  #promoters = respondents giving a 9 or 10 score
+  #Passives = respondents giving a 7 or 8 score
+  #Detractors = respondents giving a 0 to 6 score
+detractors = data[c(data$`likely to recommend` >= 0 & data$`likely to recommend` <= 6),]
+nrow(detractors) #9542
+passives = data[c(data$`likely to recommend` >= 7 & data$`likely to recommend` <= 8),]
+nrow(passives) #2687
+promoters = data[c(data$`likely to recommend` >= 9 & data$`likely to recommend` <= 10),]
+nrow(promoters) #10653
+
+nps = nrow(promoters)/nrow(data) - nrow(detractors)/nrow(data) #0.0486
+
+# Analyze bad reviews 
+dislike = data[c(data$`likely to recommend` == 0),] #5174 not recommended at all
+#Among people who gave a recommend score of 0, what are their responses
+dislike_mice_plot <- aggr(dislike, col=c('navyblue','yellow'),
+                  numbers=TRUE, sortVars=TRUE,
+                  labels=names(data), cex.axis=.7,
+                  gap=3, ylab=c("Missing data","Pattern"))
+sum(!is.na(dislike$good)) #0
+sum(!is.na(dislike$`improve?`)) #0
+sum(!is.na(dislike$`changes wanted`)) #4633
+
+# People who gave 0 score ONLY left reviews for changes, so we can dig into the reviews provided by thoese people 
+
+# Finding the top counted words in the 0 score reviews
+freq_terms(text.var=dislike,top=25,stopwords = Top200Words)
+plot(freq_terms(text.var=dislike,top=25,stopwords = Top200Words))
+
+# Identify 0 score reviews with exclamation mark
+strongly_dislike = dislike %>% filter(dislike$`changes wanted` %like% '!')
+freq_terms(text.var=strongly_dislike,top=25,stopwords = Top200Words)
+plot(freq_terms(text.var=strongly_dislike,top=25,stopwords = Top200Words))
+
+nrow(strongly_dislike) #308
+write.csv(strongly_dislike, file = "strongly_dislike.csv", row.names = FALSE)
+
+# Good reviews
+like = data[c(data$`likely to recommend` == 10),]
+freq_terms(text.var=like,top=25,stopwords = Top200Words)
+plot(freq_terms(text.var=like,top=25,stopwords = Top200Words))
+
+# Preparing data for tree model 
+data[,c(6,7,8)] <- sapply(data[,c(6,7,8)], as.character)
+data[,c(6,7,8)][is.na(data[,c(6,7,8)])] <- " "
+concated_column = paste(data$`changes wanted`, data$good, data$`improve?`, sep = " ")
+
+corpus = Corpus(VectorSource(concated_column))
+corpus = tm_map(corpus,FUN = content_transformer(tolower))
+corpus = tm_map(corpus,FUN = removePunctuation)
+corpus = tm_map(corpus,FUN = removeWords,c(stopwords('english')))
+corpus = tm_map(corpus,FUN = stripWhitespace)
+dict = findFreqTerms(DocumentTermMatrix(Corpus(VectorSource(data_tree))),lowfreq = 0)
+dict_corpus = Corpus(VectorSource(dict))
+corpus = tm_map(corpus,FUN = stemDocument)
+dtm = DocumentTermMatrix(corpus)
+dim(dtm)
+xdtm = removeSparseTerms(dtm,sparse = 0.95)
+xdtm = as.data.frame(as.matrix(xdtm))
+colnames(xdtm) = stemCompletion(x = colnames(xdtm),dictionary = dict_corpus,type='prevalent')
+colnames(xdtm) = make.names(colnames(xdtm))
+sort(colSums(xdtm),decreasing = T)
+dtm_tfidf = DocumentTermMatrix(x=corpus,control = list(weighting=function(x) weightTfIdf(x,normalize=F)))
+xdtm_tfidf = removeSparseTerms(dtm_tfidf,sparse = 0.95)
+xdtm_tfidf = as.data.frame(as.matrix(xdtm_tfidf))
+colnames(xdtm_tfidf) = stemCompletion(x = colnames(xdtm_tfidf),dictionary = dict_corpus,type='prevalent')
+colnames(xdtm_tfidf) = make.names(colnames(xdtm_tfidf))
+
+data.frame(term = colnames(xdtm),tf = colMeans(xdtm), tfidf = colMeans(xdtm_tfidf))%>%
+  arrange(desc(tf))%>%
+  top_n(20)%>%
+  gather(key=weighting_method,value=weight,2:3)%>%
+  ggplot(aes(x=term,y=weight,fill=weighting_method))+geom_col(position='dodge')+coord_flip()+theme_economist()
+
+
+data_model = cbind(recommend_rating = data$`likely to recommend`,xdtm)
+data_model_tfidf = cbind(recommend_rating = data$`likely to recommend`,xdtm_tfidf)
+set.seed(617)
+split = sample(1:nrow(data_model),size = 0.7*nrow(data_model))
+train = data_model[split,]
+test = data_model[-split,]
+
+
+tree = rpart(recommend_rating~.,train)
+rpart.plot(tree)
+
+pred_tree = predict(tree,newdata=test)
+rmse_tree = sqrt(mean((pred_tree - test$recommend_rating)^2)); rmse_tree
+
+reg = lm(recommend_rating~.,train)
+summary(reg)
+
+pred_reg = predict(reg, newdata=test)
+rmse_reg = sqrt(mean((pred_reg-test$recommend_rating)^2)); rmse_reg
+
+
+
